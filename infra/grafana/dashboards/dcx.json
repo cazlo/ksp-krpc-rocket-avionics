@@ -841,11 +841,13 @@
     "list": []
   },
   "time": {
-    "from": "now-2m",
+    "from": "now-1m",
     "to": "now"
   },
   "timepicker": {
     "refresh_intervals": [
+      "20ms",
+      "50ms",
       "100ms",
       "1s",
       "5s",

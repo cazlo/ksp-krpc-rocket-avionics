@@ -1,5 +1,5 @@
 global:
-  scrape_interval: 100ms
+  scrape_interval: 10ms
 
 scrape_configs:
   - job_name: "rocket_telemetry"
