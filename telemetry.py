@@ -4,7 +4,7 @@ import time
 from datetime import datetime, UTC
 import threading
 
-from prometheus_client import start_http_server, Gauge, Enum
+from influxdb_client import InfluxDBClient, Point, WriteOptions
 
 from mission import Telemetry
 
@@ -15,16 +15,16 @@ class KSPTelemetry:
     """
 
     def __init__(self):
-        self.publish_rate_hz = int(os.environ.get('TELEM_PUBLISH_RATE', 0))
+        influx_url = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
+        token = os.environ.get("INFLUXDB_TOKEN", "admintoken")
+        org = os.environ.get("INFLUXDB_ORG", "example_org")
+        bucket = os.environ.get("INFLUXDB_BUCKET", "telem_bucket")
+        self.org = org
+        self.bucket = bucket
+        self.client = InfluxDBClient(url=influx_url, token=token, org=org)
+        self.write_api = self.client.write_api(write_options=WriteOptions(batch_size=1))
 
-        # all the metrics which come from krpc stream and mission.Telemetry class
-        self.surface_altitude = Gauge('surface_altitude', 'surface_altitude in meters')
-        self.altitude = Gauge('altitude', 'altitude in meters')
-        self.apoapsis = Gauge('apoapsis', 'apoapsis in meters')
-        self.velocity = Gauge('velocity', 'velocity in meters per second')
-        self.vertical_vel = Gauge('vertical_vel', 'vertical_vel in meters per second')
-        self.horizontal_vel = Gauge('horizontal_vel', 'horizontal_vel in meters per second')
-        self.periapsis = Gauge('periapsis', 'periapsis in meters')
+        self.publish_rate_hz = int(os.environ.get('TELEM_PUBLISH_RATE', 0))
 
         # metrics which come from control system calculations, not krpc streams
         self.gauge_metrics = {}
@@ -35,8 +35,9 @@ class KSPTelemetry:
 
 
     def start_metrics_server(self, port: int = 8012):
+        pass # todo no longer needed but maybe helpful for debug/unit test
         # todo some kind of lock or better error handling here if this class is instantiated > once
-        start_http_server(port)
+        # start_http_server(port)
 
 
     def start_telem_publish(self, telemetry: Telemetry) -> bool:
@@ -51,19 +52,26 @@ class KSPTelemetry:
 
     def _telem_publish_thread(self, telemetry: Telemetry):
         while True:
-            self.surface_altitude.set(telemetry.surface_altitude())
-            self.altitude.set(telemetry.altitude())
-            self.apoapsis.set(telemetry.apoapsis())
-            self.velocity.set(telemetry.velocity())
-            self.vertical_vel.set(telemetry.vertical_vel())
-            self.horizontal_vel.set(telemetry.horizontal_vel())
-            self.periapsis.set(telemetry.periapsis())
+            point = (
+               Point("stream_telemetry")
+                .field("surface_altitude", telemetry.surface_altitude())
+                .field("altitude", telemetry.altitude())
+                .field("apoapsis", telemetry.apoapsis())
+                .field("velocity", telemetry.velocity())
+                .field("vertical_vel", telemetry.vertical_vel())
+                .field("horizontal_vel", telemetry.horizontal_vel())
+                .field("periapsis", telemetry.periapsis())
+                .time(time.time_ns())
+            )
+            self.write_api.write(bucket=self.bucket, record=point)
+
 
             time.sleep(1/self.publish_rate_hz)
 
 
     def register_gauge_metric(self, name: str, description: str):
-        self.gauge_metrics[name] = Gauge(name, description)
+        pass # todo maybe helpful to avoid metric name typos?
+        # self.gauge_metrics[name] = Gauge(name, description)
 
 
     def publish_gauge_metric(self, name: str, state: float, console_out: bool = False):
@@ -71,26 +79,36 @@ class KSPTelemetry:
             print(
                 f'{str(datetime.now(UTC).isoformat())} [{name}] {state}')
 
-        if name not in self.gauge_metrics:
-            print(f"WARNING: skipping publish of unknown metric '{name}'. remember to register it first with register_gauge_metric!")
-            return
         try:
-            self.gauge_metrics[name].set(state)
+            point = (
+                Point("arbitrary_telemetry")
+                .field(name, state)
+                .time(time.time_ns())
+            )
+            self.write_api.write(bucket=self.bucket, record=point)
         except Exception as e:
             print(f"ERROR: could not publish gauge metric for reason: {str(e)}")
 
 
     def register_enum_metric(self, name: str, description: str, states: [str]):
-        self.enum_metrics[name] = Enum(name, description, states=states)
+        pass # todo this would change to new impl of enum
+        # self.enum_metrics[name] = Enum(name, description, states=states)
 
 
     def publish_enum_metric(self, name:str, state: str, display_name: str = None, console_out: bool = True):
 
-        if name not in self.enum_metrics:
-            print(f"WARNING: skipping publish of unknown enum '{name}'. remember to register it first with register_enum_metric!")
-            return
+        # if name not in self.enum_metrics:
+        #     print(f"WARNING: skipping publish of unknown enum '{name}'. remember to register it first with register_enum_metric!")
+        #     return
         try:
-            self.enum_metrics[name].state(state)
+            # self.enum_metrics[name].state(state)
+            # todo mimic the prometheus enum behavior here or do something new
+            point = (
+                Point("arbitrary_enum_telemetry")
+                .field(name, state)
+                .time(time.time_ns())
+            )
+            self.write_api.write(bucket=self.bucket, record=point)
         except Exception as e:
             print(f"ERROR: could not publish enum metric for reason: {str(e)}")
 
