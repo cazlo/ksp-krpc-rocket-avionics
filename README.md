@@ -64,3 +64,9 @@ flowchart TB
   avionics <-- commands and telem --> kRPC
   
 ```
+
+kRPC interactions is split into Protobuf over TCP on 127.0.0.1:50000 and a stream server at 127.0.0.1:50001.
+
+With the stream server, you can get the "latest" value available for a telemetry item, without paying for blocking RPC actions to the kRPC backend.
+RPC actions to the kRPC backend can take tens of milliseconds in the worst cases. 
+With the real-time "frame time budget" for the 50hz avionics being only 20ms, tens of milliseconds can quickly lead to frame overruns. 
