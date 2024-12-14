@@ -8,7 +8,7 @@ launch_metrics_backend:
 	$(container_backend) compose --profile metrics_backend up -d
 
 
-avionics_file=minerva1.py
+avionics_file=dcx_simple_test copy.py
 # options for avionics_file =
 #   dcx_flight_env_expansion.py
 #   dcx_hop.py
@@ -24,7 +24,7 @@ avionics_file=minerva1.py
 
 launch_rocket:
 	cd infra && \
-	$(container_backend) compose --profile fsw run --build --service-ports fsw uv run $(avionics_file)
+	$(container_backend) compose --profile fsw run --build --service-ports fsw uv run "$(avionics_file)"
 
 
 stop_all:
