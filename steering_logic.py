@@ -173,22 +173,21 @@ def _calculate_landing_burn_time(fpa, v_inf, h_inf, ht, g, available_thrust, mas
     return 0.95 * (v_inf / a) - (v_inf / (available_thrust / mass))
 
 
-def calculate_landing_burn_time(vessel, telem_viz, g, engine_offset):
-    srf_frame = vessel.orbit.body.reference_frame
-    r = vessel.position(srf_frame)
-    v = vessel.velocity(srf_frame)
+def calculate_landing_burn_time(r, v, mass, speed, surface_altitude, available_thrust, telem_viz, g, engine_offset):
+    # srf_frame = vessel.orbit.body.reference_frame
+    # r = vessel.position(srf_frame)
+    # v = vessel.velocity(srf_frame)
     drag_scale = 0.42
 
     #while not landing_burn_flag:
-    m0 = vessel.mass
-    v_inf = vessel.flight(srf_frame).speed
-    h_inf = vessel.flight().surface_altitude + engine_offset
+    v_inf = speed
+    h_inf = surface_altitude + engine_offset
     ht = 20 # target stopping altitude
 
     with telem_viz.get_histogram_metric('get_flight_path_angle').time():
         fpa = get_flight_path_angle(r, v)
     with telem_viz.get_histogram_metric('calc_lb_final_math').time():
-        tb = _calculate_landing_burn_time(fpa, v_inf, h_inf, ht, g, vessel.available_thrust, vessel.mass)
+        tb = _calculate_landing_burn_time(fpa, v_inf, h_inf, ht, g, available_thrust, mass)
     return tb
             
 def landing_gate(vessel, telem, pid):
