@@ -239,10 +239,7 @@ def abort_steering(vessel, mission_params, conn, crew_vehicle):
     else:
         quit()
 
-def throttle_from_twr(vessel, twr_desired):
-    m0 =  vessel.mass
-    g = vessel.orbit.body.surface_gravity
-    # twr = thrust/(m0*g)
+def throttle_from_twr(mass, g, max_thrust, twr_desired):
     # thrust = twr*m0*g
-    return twr_desired*m0*g/(vessel.max_thrust)
+    return twr_desired*mass*g/(max_thrust)
         
