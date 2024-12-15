@@ -436,40 +436,30 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "distance_pitch",
+          "expr": "heading",
           "format": "time_series",
           "interval": "10ms",
           "instant": false,
           "intervalFactor": 1,
-          "legendFormat": "distance_pitch",
+          "legendFormat": "heading",
           "refId": "F",
           "range": true
         },
         {
-          "expr": "velocity_pitch",
+          "expr": "heading_error",
           "format": "time_series",
           "interval": "10ms",
           "instant": false,
           "intervalFactor": 1,
-          "legendFormat": "velocity_pitch",
+          "legendFormat": "heading_error",
           "refId": "G",
-          "range": true
-        },
-        {
-          "expr": "pitch_input",
-          "format": "time_series",
-          "interval": "10ms",
-          "instant": false,
-          "intervalFactor": 1,
-          "legendFormat": "pitch_input",
-          "refId": "H",
           "range": true
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "GNC mode 2a - Target Tracking Close",
+      "title": "GNC Heading",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -552,13 +542,13 @@
           "range": true
         },
         {
-          "expr": "heading_error",
+          "expr": "pitch",
           "format": "time_series",
           "interval": "10ms",
           "instant": false,
           "intervalFactor": 1,
-          "legendFormat": "heading_error",
-          "refId": "F",
+          "legendFormat": "pitch",
+          "refId": "PI",
           "range": true
         },
         {
@@ -585,7 +575,7 @@
       "thresholds": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "GNC mode 2b -Target Tracking Far",
+      "title": "GNC mode 2 -Target Tracking Far (belly flop)",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -701,7 +691,7 @@
       "thresholds": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "GNC mode 3 - Final Landing Approach",
+      "title": "GNC mode 3,4,5 - Final Landing Approach",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -776,7 +766,7 @@
         {
           "expr": "rate(gnc_frame_count_total[1s])",
           "format": "gnc frame rate",
-          "interval": "100ms",
+          "interval": "1s",
           "instant": false,
           "intervalFactor": 1,
           "legendFormat": "frames per second",
@@ -786,7 +776,7 @@
         {
           "expr": "rate(gnc_overrun_count_total[1s])",
           "format": "gnc_overrun_count_total",
-          "interval": "100ms",
+          "interval": "1s",
           "instant": false,
           "intervalFactor": 1,
           "legendFormat": "overruns per second",

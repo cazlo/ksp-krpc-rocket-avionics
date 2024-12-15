@@ -25,6 +25,7 @@ telem_viz.register_gauge_metric('current_horizontal_velocity', 'current_horizont
 telem_viz.register_gauge_metric('distance_pitch', 'distance_pitch')
 telem_viz.register_gauge_metric('pitch_input', 'pitch_input')
 telem_viz.register_gauge_metric('heading_error', 'heading_error')
+telem_viz.register_gauge_metric('heading', 'heading')
 telem_viz.register_gauge_metric('roll', 'roll')
 telem_viz.register_gauge_metric('roll_input', 'roll_input')
 telem_viz.register_gauge_metric('pitch', 'pitch (mode 3)')
@@ -195,22 +196,38 @@ vessel.control.gear = False
 target_alt = 67500
 dt = 0.5
 enter_control_mode(DcxControlMode.BURN_TO_ALTITUDE, telem_viz)
+expected_frame_time = (1/dcx.CLOCK_RATE) * 1e9
+def dynamic_sleep(actual_frame_time: float):
+    if actual_frame_time > expected_frame_time:
+        if telem_viz.gnc_debug:
+            print(f"Overrun! Time={actual_frame_time:.2f} seconds")
+        telem_viz.increment_counter_metric('gnc_overrun_count')
+    else:
+        to_sleep = expected_frame_time - actual_frame_time
+        time.sleep(to_sleep / 1e9)
 while True:
     #predict future apoapsis
+    frame_start = time.time_ns()
+    telem_viz.increment_counter_metric('gnc_frame_count')
     h_future = vessel.flight().mean_altitude
     v_future = telem.vertical_vel() # np.linalg.norm(np.array(vessel.flight().velocity))
     for _ in range(int(vessel.orbit.time_to_apoapsis/dt)):
         h_old = h_future
         h_future, v_future = euler_step(vessel, h_future, v_future, dt)
-        telem_viz.increment_counter_metric('gnc_frame_count')
         if h_future < h_old:
+            break
+        if h_future > target_alt:
+            print("BREAK")
             break
 
     if h_future > target_alt:
         vessel.control.throttle = 0.0
-        telem_viz.publish_gauge_metric('throttle', vessel.control.throttle, False)
+        telem_viz.publish_gauge_metric('throttle', 0.0, False)
         enter_control_mode(DcxControlMode.COAST_TO_ALTITUDE, telem_viz)
         break
+    else:
+        frame_end = time.time_ns()
+        dynamic_sleep(frame_end - frame_start)
 
     # tweak = 0.90 # fudge factor for strength of drag correction, probably somewhere in the 0.9 - 1.0 range is most accurate
     # scale_h = 5600.0 * vessel.orbit.body.atmosphere_depth / 70000.0 # rough atmosphere 1/e scale height in m
@@ -272,9 +289,8 @@ def dynamic_sleep(actual_frame_time: float):
         to_sleep = expected_frame_time - actual_frame_time
         time.sleep(to_sleep / 1e9)
 
-# performance optimization: calculate these static values only once to avoid many RPC calls to KSP game
-g = vessel.orbit.body.gravitational_parameter/(vessel.orbit.body.equatorial_radius*vessel.orbit.body.equatorial_radius)
-engine_offset = (vessel.parts.with_name(vessel.parts.engines[0].part.name)[0].position(vessel.reference_frame))[1]
+# performance optimization: calculate static values only once to avoid many RPC calls to KSP game
+g = vessel.orbit.body.gravitational_parameter / (vessel.orbit.body.equatorial_radius * vessel.orbit.body.equatorial_radius)
 
 # start async, queue based metrics publisher. this avoids blocking calls to publish metrics from impacting GNC performance
 metric_queue = Queue()
@@ -313,6 +329,8 @@ while vessel.situation != status:
     # Mode 2 is descent and landing burn start calculation
     if mode == 2:
         with telem_viz.get_histogram_metric('calculate_landing_burn_time').time():
+            engine_offset = \
+              (vessel.parts.with_name(vessel.parts.engines[0].part.name)[0].position(vessel.reference_frame))[1]
             tb = steering.calculate_landing_burn_time(vessel, telem_viz, g, engine_offset)
         if telem.surface_altitude() < 1500 or distance_to_pad < 50 or (tb < 0.5 and telem.surface_altitude() < 3000):
             enter_control_mode(DcxControlMode.MODE_3, telem_viz, False)
@@ -366,11 +384,14 @@ while vessel.situation != status:
             metric_queue.put({'name':'pitch_input', 'type': 'gauge', 'value': pitch_input})
             metric_queue.put({'name':'time_to_burn', 'type': 'gauge', 'value': tb})
             metric_queue.put({'name': 'heading_error', 'type': 'gauge', 'value': heading_error})
+            metric_queue.put({'name': 'heading', 'type': 'gauge', 'value': heading})
             metric_queue.put({'name': 'roll', 'type': 'gauge', 'value': vessel.flight().roll})
             metric_queue.put({'name': 'roll_input', 'type': 'gauge', 'value': roll_input})
 
     if mode == 3:
         with telem_viz.get_histogram_metric('calculate_landing_burn_time').time():
+            engine_offset = \
+                (vessel.parts.with_name(vessel.parts.engines[0].part.name)[0].position(vessel.reference_frame))[1]
             tb = steering.calculate_landing_burn_time(vessel, telem_viz, g, engine_offset)
 
         for thruster in vessel.parts.rcs:
@@ -404,6 +425,8 @@ while vessel.situation != status:
         vessel.auto_pilot.target_heading = heading
         vessel.auto_pilot.target_pitch = 90+pitch_input
         vessel.auto_pilot.target_roll = float('NaN')
+        current_heading = vessel.flight().heading
+        heading_error = steering.compute_heading_error(current_heading, heading)
 
         if telem_viz.gnc_debug:
             print(f"Mode 3 Outputs: {distance_to_pad:.2f}, {current_horizontal_velocity:.2f}, {pitch_input:.2f}, {telem.velocity():.2f}")
@@ -411,6 +434,8 @@ while vessel.situation != status:
             metric_queue.put({'name':'distance_to_pad', 'type': 'gauge', 'value': distance_to_pad})
             metric_queue.put({'name':'current_horizontal_velocity', 'type': 'gauge', 'value': current_horizontal_velocity})
             metric_queue.put({'name':'pitch_input', 'type': 'gauge', 'value': pitch_input})
+            metric_queue.put({'name':'heading', 'type': 'gauge', 'value': heading})
+            metric_queue.put({'name':'heading_error', 'type': 'gauge', 'value': heading_error})
             # note velocity already published by background thread
 
         if (tb < 0.5 or telem.surface_altitude() < 1500) and burn_flag is False:
@@ -502,6 +527,7 @@ while vessel.situation != status:
                 vessel.auto_pilot.target_heading = heading
                 vessel.auto_pilot.target_roll = float('NaN')
                 mode = 5
+                enter_control_mode(DcxControlMode.MODE_5, telem_viz)
                 vert_vel_controller.set_gains(0.25, 0.1, 0)
                 alt_controller.set_point = -10.0
                 alt_controller.set_max_output(-4.0)
@@ -509,6 +535,9 @@ while vessel.situation != status:
                 hvel_controller.set_max_output(10.0)
                 hvel_controller.set_min_output(-10.0)
                 hvel_controller.set_gains(0.05, 0.15, 0.05)
+
+        current_heading = vessel.flight().heading
+        heading_error = steering.compute_heading_error(current_heading, heading)
 
         if telem_viz.gnc_debug:
             print(f"Mode 4 Outputs: {distance_to_pad:.2f}, {current_horizontal_velocity}, {pitch_input:.2f}")
@@ -518,6 +547,8 @@ while vessel.situation != status:
             metric_queue.put({'name':'pitch_input', 'type': 'gauge', 'value': pitch_input})
             metric_queue.put({'name': 'vert_vel_setpoint', 'type': 'gauge', 'value': vert_vel_controller.set_point})
             metric_queue.put({'name': 'alt_controller_setpoint', 'type': 'gauge', 'value': alt_controller.set_point})
+            metric_queue.put({'name': 'heading', 'type': 'gauge', 'value': heading})
+            metric_queue.put({'name': 'heading_error', 'type': 'gauge', 'value': heading_error})
 
     # constant rate of descent mode
     if mode == 5:
@@ -557,10 +588,11 @@ while vessel.situation != status:
             print(f"Mode 5 Outputs: {distance_to_pad:.2f}, {telem.horizontal_vel():2f}, {pitch:.2f}, {vert_vel_setpoint:.2}, {alt_controller.set_point:.2f}")
         with telem_viz.get_histogram_metric('publish_gnc_metrics_b').time():
             metric_queue.put({'name':'distance_to_pad', 'type': 'gauge', 'value': distance_to_pad})
+            metric_queue.put({'name': 'current_horizontal_velocity', 'type': 'gauge', 'value': telem.horizontal_vel()})
             metric_queue.put({'name':'pitch', 'type': 'gauge', 'value': pitch})
             metric_queue.put({'name':'vert_vel_setpoint', 'type': 'gauge', 'value': vert_vel_setpoint})
             metric_queue.put({'name':'alt_controller_setpoint', 'type': 'gauge', 'value': alt_controller.set_point})
-        # todo telemetry out
+            metric_queue.put({'name':'heading', 'type': 'gauge', 'value': heading})
 
     if telem.surface_altitude() < 30:
         vessel.control.gear = True
