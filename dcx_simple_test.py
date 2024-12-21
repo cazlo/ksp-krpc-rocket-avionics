@@ -42,17 +42,28 @@ telem_viz.register_histogram_metric('calc_lb_final_math', 'calc_lb_final_math')
 
 enter_control_mode(DcxControlMode.PAD, telem_viz)
 
-def euler_step(vessel, h, v, dt):
+def euler_step(vessel, h, v, dt, telem, space_center, h_init, ref_frame):
     h = h + v * dt
-    r = vessel.orbit.body.equatorial_radius + h 
+    r = vessel.orbit.body.equatorial_radius + h  + h_init
     Ft = 0 # coasting, no thrust
-    rho = 1.7185*np.exp(-2e-04*h)
-    Cd_A = 3.5 # kg/m^3
-    Fd =  0.5*rho*v**2*Cd_A
-    Fg = vessel.orbit.body.gravitational_parameter * vessel.mass / r**2
-    a = (Ft - Fd - Fg) / vessel.mass
-    v = v + a * dt
 
+    # y axis in vessel.reference_frame points towards velocity of vehicle with origin on center of mass. y + h
+    new_position = (0.0, 0.0 + h, 0.0)
+    # convert to orbit body ref frame
+    orbit_body_position = space_center.transform_position(new_position,vessel.reference_frame, ref_frame)
+
+    # todo why do we need -v here?
+    new_vel = (0.0, -v, 0.0)
+    # todo should be vessel.reference_frame instead of vessel.orbital_reference_frame
+    vel_orbit_body_frame = space_center.transform_velocity(new_position, new_vel, vessel.orbital_reference_frame, ref_frame)
+
+    aero_forces = vessel.flight(ref_frame).simulate_aerodynamic_force_at(vessel.orbit.body, orbit_body_position, vel_orbit_body_frame) # force vector tuple
+    Fd = abs(np.linalg.norm(np.array(aero_forces))) # abs(aero_forces[1]) # want force in y direction  # 0.5*rho*v**2*Cd_A
+    Fg = vessel.orbit.body.gravitational_parameter * vessel.mass / r**2
+    a = (Ft - Fd - Fg) / (vessel.mass)
+    v = v + a * dt
+    if h_init >= 20000:
+        print (f"h={h} h_init={h_init} h_total={h+h_init} v={v} Fd={Fd} Fg={Fg} a={a} new_position={str(new_position)} aero_forces={str(aero_forces)} new_vel={new_vel} apoapsis={telem.apoapsis()} altitude={telem.altitude()}")
     return h, v
 
 def compute_los_angle(current_position, target_position):
@@ -180,30 +191,42 @@ vessel.control.rcs = True
 vessel, telem = utils.check_active_vehicle(conn, vessel,
                                            mission_params.root_vessel)
 telem_viz.start_telem_publish(telem)
-time.sleep(100/dcx.CLOCK_RATE)
 vessel.control.toggle_action_group(1)
 vessel.auto_pilot.target_pitch_and_heading(87.0, mission_params.target_heading)
 vessel.auto_pilot.wait()
-# time.sleep(200/dcx.CLOCK_RATE)
 # vessel.auto_pilot.target_roll = vessel.flight(ref_frame).roll
 vessel.control.gear = False
 
 # Wait until target alititude is achieved
-target_alt = 68000
-dt = 0.5
+target_alt = 70000
+dt = 3 # todo try 1 here
 enter_control_mode(DcxControlMode.BURN_TO_ALTITUDE, telem_viz)
+time.sleep(0.5) # todo do something better than this to wait for streaming data to be avail and not throw exception
 while True:
     #predict future apoapsis
-    h_future = vessel.flight().mean_altitude
-    v_future = telem.vertical_vel() # np.linalg.norm(np.array(vessel.flight().velocity))
+    h_future = 0
+    h_init = telem.altitude()
+    v_future = telem.vertical_vel()
     for _ in range(int(vessel.orbit.time_to_apoapsis/dt)):
-        h_old = h_future
-        h_future, v_future = euler_step(vessel, h_future, v_future, dt)
         telem_viz.increment_counter_metric('gnc_frame_count')
-        if h_future < h_old:
+        if h_future + h_init < telem.altitude():
+            # discard iterations which are using old data
+            break
+        if h_future + h_init > telem.apoapsis():
+            # discard iterations which overestimate aero force
             break
 
-    if h_future > target_alt:
+        h_init = telem.altitude()
+        h_old = h_future
+        h_future, v_future = euler_step(vessel, h_future, v_future, dt, telem, conn.space_center, h_init, ref_frame)
+        if h_future < h_old or (h_future + h_init > target_alt and h_future + h_init <= telem.apoapsis()):
+            break
+        if h_future + h_init + v_future > target_alt:
+            # to save another aero calculation iteration, anticipate that next frame will pass us to apopapsis
+            break
+
+    if ( h_future  + h_init >= target_alt and h_future + h_init < telem.apoapsis() ) or \
+            (h_future + h_init + v_future > target_alt and h_future + h_init <= telem.apoapsis()):
         vessel.control.throttle = 0.0
         telem_viz.publish_gauge_metric('throttle', vessel.control.throttle, False)
         enter_control_mode(DcxControlMode.COAST_TO_ALTITUDE, telem_viz)
@@ -221,6 +244,11 @@ while telem.vertical_vel() > 2:
     telem_viz.increment_counter_metric('gnc_frame_count')
     time.sleep(10/dcx.CLOCK_RATE)
     pass
+
+achieved_alt = telem.altitude()
+percent_diff = ( abs(achieved_alt - target_alt) / ((achieved_alt + target_alt) /  2) ) * 100
+print(f"Target altitude = {target_alt}, Achieved altitude = {achieved_alt}, %percent_diff = {percent_diff}")
+conn.krpc.paused = True
 
 enter_control_mode(DcxControlMode.VERTICAL_HOLD, telem_viz)
 print("Passed %i, entering vertical velocity hold ..." % target_alt)
