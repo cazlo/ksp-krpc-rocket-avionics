@@ -42,28 +42,26 @@ telem_viz.register_histogram_metric('calc_lb_final_math', 'calc_lb_final_math')
 
 enter_control_mode(DcxControlMode.PAD, telem_viz)
 
-def euler_step(vessel, h, v, dt, telem, space_center, h_init, ref_frame):
+def euler_step(h, v, dt, telem, space_center, h_init, ref_frame, vessel_mass, gravitational_parameter, equatorial_radius, vessel_reference_frame, vessel_flight_ref_frame, vessel_orbit_body):
     h = h + v * dt
-    r = vessel.orbit.body.equatorial_radius + h  + h_init
+    r = equatorial_radius + h  + h_init
     Ft = 0 # coasting, no thrust
 
     # y axis in vessel.reference_frame points towards velocity of vehicle with origin on center of mass. y + h
     new_position = (0.0, 0.0 + h, 0.0)
     # convert to orbit body ref frame
-    orbit_body_position = space_center.transform_position(new_position,vessel.reference_frame, ref_frame)
+    orbit_body_position = space_center.transform_position(new_position,vessel_reference_frame, ref_frame)
 
-    # todo why do we need -v here?
     new_vel = (0.0, -v, 0.0)
-    # todo should be vessel.reference_frame instead of vessel.orbital_reference_frame
-    vel_orbit_body_frame = space_center.transform_velocity(new_position, new_vel, vessel.orbital_reference_frame, ref_frame)
+    vel_orbit_body_frame = space_center.transform_velocity(new_position, new_vel, vessel_reference_frame, ref_frame)
 
-    aero_forces = vessel.flight(ref_frame).simulate_aerodynamic_force_at(vessel.orbit.body, orbit_body_position, vel_orbit_body_frame) # force vector tuple
+    aero_forces = vessel_flight_ref_frame.simulate_aerodynamic_force_at(vessel_orbit_body, orbit_body_position, vel_orbit_body_frame) # force vector tuple
     Fd = abs(np.linalg.norm(np.array(aero_forces))) # abs(aero_forces[1]) # want force in y direction  # 0.5*rho*v**2*Cd_A
-    Fg = vessel.orbit.body.gravitational_parameter * vessel.mass / r**2
-    a = (Ft - Fd - Fg) / (vessel.mass)
+    Fg = gravitational_parameter * vessel_mass / r**2
+    a = (Ft - Fd - Fg) / (vessel_mass)
     v = v + a * dt
-    if h_init >= 20000:
-        print (f"h={h} h_init={h_init} h_total={h+h_init} v={v} Fd={Fd} Fg={Fg} a={a} new_position={str(new_position)} aero_forces={str(aero_forces)} new_vel={new_vel} apoapsis={telem.apoapsis()} altitude={telem.altitude()}")
+    # if h_init >= 20000:
+    #     print (f"h={h} h_init={h_init} h_total={h+h_init} v={v} Fd={Fd} Fg={Fg} a={a} new_position={str(new_position)} aero_forces={str(aero_forces)} new_vel={new_vel} apoapsis={telem.apoapsis()} altitude={telem.altitude()}")
     return h, v
 
 def compute_los_angle(current_position, target_position):
@@ -199,15 +197,24 @@ vessel.control.gear = False
 
 # Wait until target alititude is achieved
 target_alt = 70000
-dt = 3 # todo try 1 here
+dt = 3
 enter_control_mode(DcxControlMode.BURN_TO_ALTITUDE, telem_viz)
 time.sleep(0.5) # todo do something better than this to wait for streaming data to be avail and not throw exception
+
+vessel_mass = conn.add_stream(getattr, vessel, 'mass')
+vessel_orbit_body = vessel.orbit.body
+gravitational_parameter = vessel_orbit_body.gravitational_parameter
+equatorial_radius = vessel_orbit_body.equatorial_radius
+vessel_orbit_time_to_apoapsis = conn.add_stream(getattr, vessel.orbit, 'time_to_apoapsis')
+
 while True:
     #predict future apoapsis
     h_future = 0
     h_init = telem.altitude()
     v_future = telem.vertical_vel()
-    for _ in range(int(vessel.orbit.time_to_apoapsis/dt)):
+    vessel_reference_frame = vessel.reference_frame
+    vessel_flight_ref_frame = vessel.flight(ref_frame)
+    for _ in range(int(vessel_orbit_time_to_apoapsis()/dt)):
         telem_viz.increment_counter_metric('gnc_frame_count')
         if h_future + h_init < telem.altitude():
             # discard iterations which are using old data
@@ -218,7 +225,7 @@ while True:
 
         h_init = telem.altitude()
         h_old = h_future
-        h_future, v_future = euler_step(vessel, h_future, v_future, dt, telem, conn.space_center, h_init, ref_frame)
+        h_future, v_future = euler_step(h_future, v_future, dt, telem, conn.space_center, h_init, ref_frame, vessel_mass(), gravitational_parameter, equatorial_radius, vessel_reference_frame, vessel_flight_ref_frame, vessel_orbit_body)
         if h_future < h_old or (h_future + h_init > target_alt and h_future + h_init <= telem.apoapsis()):
             break
         if h_future + h_init + v_future > target_alt:
@@ -226,7 +233,7 @@ while True:
             break
 
     if ( h_future  + h_init >= target_alt and h_future + h_init < telem.apoapsis() ) or \
-            (h_future + h_init + v_future > target_alt and h_future + h_init <= telem.apoapsis()):
+            (h_future + h_init + v_future > target_alt and h_future + h_init <= telem.apoapsis() and telem.apoapsis() > target_alt):
         vessel.control.throttle = 0.0
         telem_viz.publish_gauge_metric('throttle', vessel.control.throttle, False)
         enter_control_mode(DcxControlMode.COAST_TO_ALTITUDE, telem_viz)
